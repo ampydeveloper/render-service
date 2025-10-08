@@ -391,29 +391,30 @@ def analyze_audio():
                     raise Exception("Audio file too large. Maximum size is 50MB.")
                 
                 y, sr = librosa.load(temp_filename, sr=22050, mono=True, dtype=np.float32)
-                logging.info(f"Audio loaded with librosa: duration={len(y)/sr:.2f}s, sample_rate={sr}Hz, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
+                duration = len(y) / sr
+                if duration > 30:  # Limit to 30 seconds for key detection
+                    raise Exception("Audio file too long. Maximum duration is 30 seconds for analysis.")
+                logging.info(f"Audio loaded with librosa: duration={duration:.2f}s, sample_rate={sr}Hz, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
             except Exception as load_error:
                 logging.warning(f"Librosa load failed: {load_error}")
                 try:
                     # Fallback to soundfile
                     y, sr = sf.read(temp_filename)
-                    logging.info(f"Audio loaded with soundfile: duration={len(y)/sr:.2f}s, sample_rate={sr}Hz")
+                    duration = len(y) / sr
+                    if duration > 30:
+                        raise Exception("Audio file too long. Maximum duration is 30 seconds for analysis.")
+                    logging.info(f"Audio loaded with soundfile: duration={duration:.2f}s, sample_rate={sr}Hz")
                 except Exception as sf_error:
                     logging.error(f"Both librosa and soundfile failed: librosa={load_error}, soundfile={sf_error}")
                     raise Exception(f"Unable to load audio file. Librosa error: {load_error}. Soundfile error: {sf_error}")
             
-            # Extract harmonic component for key detection (optional, skip if causing issues)
-            try:
-                logging.info("Extracting harmonic component...")
-                y_harmonic = librosa.effects.harmonic(y)
-                logging.info("Harmonic extraction successful")
-            except Exception as harmonic_error:
-                logging.warning(f"Harmonic extraction failed: {harmonic_error}, using original signal")
-                y_harmonic = y
+            # Skip harmonic extraction to reduce memory usage and potential crashes
+            y_harmonic = y
+            logging.info("Using original signal for analysis (harmonic extraction skipped for stability)")
             
             # Compute chromagram using STFT (faster and less memory than CQT)
             logging.info("Computing chromagram...")
-            chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr)
+            chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr, n_fft=1024, hop_length=512)
             logging.info(f"Chroma computed, shape: {chroma.shape}")
             
             # Compute BPM using beat tracking
