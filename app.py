@@ -392,8 +392,10 @@ def analyze_audio():
                 
                 y, sr = librosa.load(temp_filename, sr=22050, mono=True, dtype=np.float32)
                 duration = len(y) / sr
-                if duration > 30:  # Limit to 30 seconds for key detection
-                    raise Exception("Audio file too long. Maximum duration is 30 seconds for analysis.")
+                if duration > 30:  # Trim to 30 seconds for key detection
+                    y = y[:int(30 * sr)]
+                    duration = 30.0
+                    logging.info("Audio trimmed to 30 seconds for analysis")
                 logging.info(f"Audio loaded with librosa: duration={duration:.2f}s, sample_rate={sr}Hz, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
             except Exception as load_error:
                 logging.warning(f"Librosa load failed: {load_error}")
@@ -402,7 +404,9 @@ def analyze_audio():
                     y, sr = sf.read(temp_filename)
                     duration = len(y) / sr
                     if duration > 30:
-                        raise Exception("Audio file too long. Maximum duration is 30 seconds for analysis.")
+                        y = y[:int(30 * sr)]
+                        duration = 30.0
+                        logging.info("Audio trimmed to 30 seconds for analysis")
                     logging.info(f"Audio loaded with soundfile: duration={duration:.2f}s, sample_rate={sr}Hz")
                 except Exception as sf_error:
                     logging.error(f"Both librosa and soundfile failed: librosa={load_error}, soundfile={sf_error}")
