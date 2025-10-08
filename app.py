@@ -324,7 +324,7 @@ try:
     # Create a simple test signal
     test_signal = np.sin(2 * np.pi * 440 * np.linspace(0, 1, 22050))  # 1 second of 440Hz tone
     # Test basic librosa functions
-    chroma_test = librosa.feature.chroma_stft(y=test_signal, sr=22050)
+    chroma_test = librosa.feature.chroma_cqt(y=test_signal, sr=22050)
     tempo_test, _ = librosa.beat.beat_track(y=test_signal, sr=22050)
     logger.info(f"Librosa test successful - tempo: {tempo_test}, chroma shape: {chroma_test.shape}")
 except Exception as test_error:
