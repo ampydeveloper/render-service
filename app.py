@@ -402,13 +402,19 @@ def analyze_audio():
                     logging.error(f"Both librosa and soundfile failed: librosa={load_error}, soundfile={sf_error}")
                     raise Exception(f"Unable to load audio file. Librosa error: {load_error}. Soundfile error: {sf_error}")
             
-            # Extract harmonic component for key detection
-            logging.info("Extracting harmonic component...")
-            y_harmonic = librosa.effects.harmonic(y)
+            # Extract harmonic component for key detection (optional, skip if causing issues)
+            try:
+                logging.info("Extracting harmonic component...")
+                y_harmonic = librosa.effects.harmonic(y)
+                logging.info("Harmonic extraction successful")
+            except Exception as harmonic_error:
+                logging.warning(f"Harmonic extraction failed: {harmonic_error}, using original signal")
+                y_harmonic = y
             
-            # Compute chromagram
+            # Compute chromagram using STFT (faster and less memory than CQT)
             logging.info("Computing chromagram...")
-            chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
+            chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr)
+            logging.info(f"Chroma computed, shape: {chroma.shape}")
             
             # Compute BPM using beat tracking
             logging.info("Computing BPM...")
@@ -419,18 +425,21 @@ def analyze_audio():
             # Compute key using Krumhansl-Schmuckler key-finding algorithm
             logging.info("Computing key using Krumhansl-Schmuckler algorithm...")
             key_corrs = []
+            chroma_mean = np.mean(chroma, axis=1)
+            logging.info(f"Chroma mean computed: {chroma_mean.shape}")
             for i in range(12):  # 12 major keys
                 major_template = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
                 major_template = np.roll(major_template, i)
-                major_corr = np.corrcoef(np.mean(chroma, axis=1), major_template)[0, 1]
+                major_corr = np.corrcoef(chroma_mean, major_template)[0, 1]
                 key_corrs.append(major_corr)
             
             for i in range(12):  # 12 minor keys
                 minor_template = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
                 minor_template = np.roll(minor_template, i)
-                minor_corr = np.corrcoef(np.mean(chroma, axis=1), minor_template)[0, 1]
+                minor_corr = np.corrcoef(chroma_mean, minor_template)[0, 1]
                 key_corrs.append(minor_corr)
             
+            logging.info(f"Key correlations computed: {len(key_corrs)} values")
             # Find key with maximum correlation
             key_index = np.argmax(key_corrs)
             is_minor = key_index >= 12
