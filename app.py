@@ -385,8 +385,13 @@ def analyze_audio():
             logging.info("Loading audio file...")
             try:
                 # Try loading with librosa first (handles most formats)
-                y, sr = librosa.load(temp_filename, sr=None)
-                logging.info(f"Audio loaded with librosa: duration={len(y)/sr:.2f}s, sample_rate={sr}Hz")
+                # Limit file size and use memory-efficient loading
+                file_size = os.path.getsize(temp_filename)
+                if file_size > 50 * 1024 * 1024:  # 50MB limit
+                    raise Exception("Audio file too large. Maximum size is 50MB.")
+                
+                y, sr = librosa.load(temp_filename, sr=22050, mono=True, dtype=np.float32)
+                logging.info(f"Audio loaded with librosa: duration={len(y)/sr:.2f}s, sample_rate={sr}Hz, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
             except Exception as load_error:
                 logging.warning(f"Librosa load failed: {load_error}")
                 try:
