@@ -396,10 +396,30 @@ def analyze_audio():
             if file_size > 50 * 1024 * 1024:  # 50MB limit
                 raise Exception("Audio file too large. Maximum size is 50MB.")
             
+            # For M4A/AAC files, convert to WAV first using pydub to avoid audioread hanging issues
+            converted_file = None
+            if file_extension.lower() in ['.m4a', '.aac', '.mp4']:
+                logging.info("M4A/AAC file detected, converting to WAV first...")
+                try:
+                    from pydub import AudioSegment
+                    # Load M4A with pydub (uses ffmpeg under the hood)
+                    audio = AudioSegment.from_file(temp_filename, format="m4a")
+                    # Export as WAV
+                    converted_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                    audio.export(converted_file.name, format="wav")
+                    logging.info(f"✓ Converted to WAV: {converted_file.name}")
+                    # Use the converted file
+                    actual_file = converted_file.name
+                except Exception as convert_error:
+                    logging.error(f"Pydub conversion failed: {convert_error}")
+                    actual_file = temp_filename
+            else:
+                actual_file = temp_filename
+            
             try:
-                # Try loading with librosa first (handles most formats including M4A via audioread/ffmpeg)
-                logging.info("Attempting to load with librosa...")
-                y, sr = librosa.load(temp_filename, sr=22050, mono=True, dtype=np.float32)
+                # Try loading with librosa
+                logging.info(f"Attempting to load with librosa from: {actual_file}")
+                y, sr = librosa.load(actual_file, sr=22050, mono=True, dtype=np.float32)
                 duration = len(y) / sr
                 logging.info(f"✓ Audio loaded with librosa: duration={duration:.2f}s, sample_rate={sr}Hz, samples={len(y)}, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
                 
@@ -412,7 +432,7 @@ def analyze_audio():
                 logging.info("Trying soundfile as fallback...")
                 try:
                     # Fallback to soundfile (works well with WAV, FLAC, OGG)
-                    y, sr = sf.read(temp_filename, dtype='float32')
+                    y, sr = sf.read(actual_file, dtype='float32')
                     if len(y.shape) > 1:  # Convert stereo to mono
                         y = np.mean(y, axis=1)
                     # Resample to 22050 if needed
@@ -429,11 +449,7 @@ def analyze_audio():
                         
                 except Exception as sf_error:
                     logging.error(f"Both librosa and soundfile failed: librosa={load_error}, soundfile={sf_error}")
-                    # Provide helpful error message based on file type
-                    if file_extension.lower() in ['.m4a', '.aac']:
-                        raise Exception(f"Unable to load M4A/AAC file. Make sure ffmpeg is installed. Error: {load_error}")
-                    else:
-                        raise Exception(f"Unable to load audio file. Librosa error: {load_error}. Soundfile error: {sf_error}")
+                    raise Exception(f"Unable to load audio file. Error: {load_error}")
             
             # Skip harmonic extraction to reduce memory usage and potential crashes
             y_harmonic = y
@@ -502,8 +518,11 @@ def analyze_audio():
             
             logging.info(f"Key analysis complete: {key_name} (confidence: {confidence:.3f})")
             
-            # Clean up the temporary file
+            # Clean up the temporary files
             os.unlink(temp_filename)
+            if converted_file and os.path.exists(converted_file.name):
+                os.unlink(converted_file.name)
+                logging.info("Cleaned up converted WAV file")
             
             result = {
                 "key": key_name,
@@ -522,9 +541,11 @@ def analyze_audio():
             logging.error(f"Error analyzing audio: {str(e)}")
             logging.error(f"Full traceback: {error_details}")
             
-            # Clean up the temporary file
+            # Clean up the temporary files
             if 'temp_filename' in locals() and os.path.exists(temp_filename):
                 os.unlink(temp_filename)
+            if 'converted_file' in locals() and converted_file and os.path.exists(converted_file.name):
+                os.unlink(converted_file.name)
             
             # Provide more specific error messages
             error_msg = str(e)
