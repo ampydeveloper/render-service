@@ -373,70 +373,119 @@ def analyze_audio():
             
         logging.info("Received file: %s", audio_file.filename)
         
-        # Save the uploaded file to a temporary location
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+        # Save the uploaded file to a temporary location with the correct extension
+        # Preserve the file extension to help audio libraries detect the format
+        file_extension = os.path.splitext(audio_file.filename)[1] or '.wav'
+        logging.info(f"File extension detected: {file_extension}")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
             audio_file.save(temp_file.name)
             temp_filename = temp_file.name
+        
+        logging.info(f"Saved temporary file: {temp_filename} (size: {os.path.getsize(temp_filename)} bytes)")
         
         try:
             logging.info("Starting audio analysis with librosa...")
             
             # Load the audio file with librosa
             logging.info("Loading audio file...")
+            
+            # Check file size
+            file_size = os.path.getsize(temp_filename)
+            logging.info(f"File size: {file_size / 1024:.1f} KB")
+            if file_size > 50 * 1024 * 1024:  # 50MB limit
+                raise Exception("Audio file too large. Maximum size is 50MB.")
+            
             try:
-                # Try loading with librosa first (handles most formats)
-                # Limit file size and use memory-efficient loading
-                file_size = os.path.getsize(temp_filename)
-                if file_size > 50 * 1024 * 1024:  # 50MB limit
-                    raise Exception("Audio file too large. Maximum size is 50MB.")
-                
+                # Try loading with librosa first (handles most formats including M4A via audioread/ffmpeg)
+                logging.info("Attempting to load with librosa...")
                 y, sr = librosa.load(temp_filename, sr=22050, mono=True, dtype=np.float32)
                 duration = len(y) / sr
-                logging.info(f"Audio loaded with librosa: duration={duration:.2f}s, sample_rate={sr}Hz, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
+                logging.info(f"✓ Audio loaded with librosa: duration={duration:.2f}s, sample_rate={sr}Hz, samples={len(y)}, memory_usage={y.nbytes / 1024 / 1024:.1f}MB")
+                
+                # Validate that we got actual audio data
+                if len(y) == 0:
+                    raise Exception("Audio file is empty or corrupt")
+                    
             except Exception as load_error:
                 logging.warning(f"Librosa load failed: {load_error}")
+                logging.info("Trying soundfile as fallback...")
                 try:
-                    # Fallback to soundfile
-                    y, sr = sf.read(temp_filename)
+                    # Fallback to soundfile (works well with WAV, FLAC, OGG)
+                    y, sr = sf.read(temp_filename, dtype='float32')
+                    if len(y.shape) > 1:  # Convert stereo to mono
+                        y = np.mean(y, axis=1)
+                    # Resample to 22050 if needed
+                    if sr != 22050:
+                        logging.info(f"Resampling from {sr}Hz to 22050Hz")
+                        y = librosa.resample(y, orig_sr=sr, target_sr=22050)
+                        sr = 22050
                     duration = len(y) / sr
-                    logging.info(f"Audio loaded with soundfile: duration={duration:.2f}s, sample_rate={sr}Hz")
+                    logging.info(f"✓ Audio loaded with soundfile: duration={duration:.2f}s, sample_rate={sr}Hz, samples={len(y)}")
+                    
+                    # Validate that we got actual audio data
+                    if len(y) == 0:
+                        raise Exception("Audio file is empty or corrupt")
+                        
                 except Exception as sf_error:
                     logging.error(f"Both librosa and soundfile failed: librosa={load_error}, soundfile={sf_error}")
-                    raise Exception(f"Unable to load audio file. Librosa error: {load_error}. Soundfile error: {sf_error}")
+                    # Provide helpful error message based on file type
+                    if file_extension.lower() in ['.m4a', '.aac']:
+                        raise Exception(f"Unable to load M4A/AAC file. Make sure ffmpeg is installed. Error: {load_error}")
+                    else:
+                        raise Exception(f"Unable to load audio file. Librosa error: {load_error}. Soundfile error: {sf_error}")
             
             # Skip harmonic extraction to reduce memory usage and potential crashes
             y_harmonic = y
             logging.info("Using original signal for analysis (harmonic extraction skipped for stability)")
+            logging.info(f"Signal stats: min={np.min(y):.4f}, max={np.max(y):.4f}, mean={np.mean(y):.4f}, std={np.std(y):.4f}")
             
             # Compute chromagram using STFT (faster and less memory than CQT)
             logging.info("Computing chromagram...")
-            chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr, n_fft=1024, hop_length=512)
-            logging.info(f"Chroma computed, shape: {chroma.shape}")
+            try:
+                chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr, n_fft=1024, hop_length=512)
+                logging.info(f"✓ Chroma computed, shape: {chroma.shape}, memory: {chroma.nbytes / 1024:.1f} KB")
+            except Exception as chroma_error:
+                logging.error(f"Chromagram computation failed: {chroma_error}")
+                raise
             
             # Compute BPM using beat tracking
             logging.info("Computing BPM...")
-            tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-            bpm = float(tempo)
-            logging.info(f"BPM detected: {bpm}")
+            try:
+                tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+                bpm = float(tempo)
+                logging.info(f"✓ BPM detected: {bpm:.1f} (beats found: {len(beats)})")
+            except Exception as bpm_error:
+                logging.error(f"BPM computation failed: {bpm_error}")
+                raise
             
             # Compute key using Krumhansl-Schmuckler key-finding algorithm
             logging.info("Computing key using Krumhansl-Schmuckler algorithm...")
-            key_corrs = []
-            chroma_mean = np.mean(chroma, axis=1)
-            logging.info(f"Chroma mean computed: {chroma_mean.shape}")
+            try:
+                key_corrs = []
+                chroma_mean = np.mean(chroma, axis=1)
+                logging.info(f"✓ Chroma mean computed: {chroma_mean.shape}, values: {chroma_mean}")
+            except Exception as key_error:
+                logging.error(f"Key computation failed: {key_error}")
+                raise
+            
+            logging.info("Computing major key correlations...")
             for i in range(12):  # 12 major keys
                 major_template = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
                 major_template = np.roll(major_template, i)
                 major_corr = np.corrcoef(chroma_mean, major_template)[0, 1]
                 key_corrs.append(major_corr)
+            logging.info(f"✓ Major key correlations computed: {len(key_corrs)} values")
             
+            logging.info("Computing minor key correlations...")
             for i in range(12):  # 12 minor keys
                 minor_template = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
                 minor_template = np.roll(minor_template, i)
                 minor_corr = np.corrcoef(chroma_mean, minor_template)[0, 1]
                 key_corrs.append(minor_corr)
             
-            logging.info(f"Key correlations computed: {len(key_corrs)} values")
+            logging.info(f"✓ All key correlations computed: {len(key_corrs)} total values")
+            logging.info(f"Key correlations: {[f'{c:.3f}' for c in key_corrs]}")
             # Find key with maximum correlation
             key_index = np.argmax(key_corrs)
             is_minor = key_index >= 12
